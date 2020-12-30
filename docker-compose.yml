@@ -1,0 +1,186 @@
+version: '3.6'
+
+services:
+  core:
+    build: mod/core
+    restart: unless-stopped
+    depends_on:
+        - redis
+    environment:
+      DEV_MODE: ${DEV_MODE:-}
+      DOMAIN: ${DOMAIN}
+      ENABLE_RECORDING: ${ENABLE_RECORDING:-false}
+      SHARED_SECRET: ${SHARED_SECRET}
+      WELCOME_MESSAGE: ${WELCOME_MESSAGE:-}
+      WELCOME_FOOTER: ${WELCOME_FOOTER}
+      STUN_SERVER: stun:${STUN_IP}:${STUN_PORT}
+      TURN_SERVER: ${TURN_SERVER:-}
+      TURN_SECRET: ${TURN_SECRET:-}
+    volumes:
+      - bigbluebutton:/var/bigbluebutton
+      - vol-freeswitch:/var/freeswitch/meetings
+      - vol-kurento:/var/kurento
+    networks:
+      bbb-net:
+        ipv4_address: 10.7.7.2
+
+  freeswitch:
+    build: mod/freeswitch
+    restart: unless-stopped
+    cap_add:
+      - IPC_LOCK
+      - NET_ADMIN
+      - NET_RAW
+      - NET_BROADCAST
+      - SYS_NICE
+      - SYS_RESOURCE
+    environment:
+      DOMAIN: ${DOMAIN}
+      EXTERNAL_IPv4: ${EXTERNAL_IPv4}
+      EXTERNAL_IPv6: ${EXTERNAL_IPv6:-::1}
+      SIP_IP_ALLOWLIST: ${SIP_IP_ALLOWLIST:-}
+      DISABLE_SOUND_MUTED: ${DISABLE_SOUND_MUTED:-false}
+      DISABLE_SOUND_ALONE: ${DISABLE_SOUND_ALONE:-false}
+    volumes:
+      - ./conf/sip_profiles:/etc/freeswitch/sip_profiles/external
+      - ./conf/dialplan_public:/etc/freeswitch/dialplan/public_docker
+      - vol-freeswitch:/var/freeswitch/meetings
+    network_mode: host
+  
+  nginx:
+    build: mod/nginx
+    restart: unless-stopped
+    depends_on:
+      - etherpad
+      - webrtc-sfu
+      - html5
+    volumes:
+      - bigbluebutton:/var/bigbluebutton
+      - html5-static:/html5-static:ro
+      - ${DEFAULT_PRESENTATION:-/dev/null}:/etc/nginx/html/default.pdf
+    network_mode: host
+    extra_hosts:
+      - "host.docker.internal:10.7.7.1"
+      - "core:10.7.7.2"
+      - "etherpad:10.7.7.4"
+      - "webrtc-sfu:10.7.7.10"
+      - "html5:10.7.7.11"
+
+  etherpad:
+    build: mod/etherpad
+    restart: unless-stopped
+    depends_on:
+      - redis
+    environment:
+      ETHERPAD_API_KEY: ${ETHERPAD_API_KEY}
+    networks:
+      bbb-net:
+        ipv4_address: 10.7.7.4
+
+  redis:
+    image: redis:6.0-alpine
+    restart: unless-stopped
+    networks:
+      bbb-net:
+        ipv4_address: 10.7.7.5 
+
+  mongodb:
+    image: mongo:4.2
+    restart: unless-stopped
+    networks:
+      bbb-net:
+        ipv4_address: 10.7.7.6
+
+  kurento:
+    image: kurento/kurento-media-server:6.15
+    restart: unless-stopped
+    environment: 
+      KMS_STUN_IP: ${STUN_IP}
+      KMS_STUN_PORT: ${STUN_PORT}
+      KMS_MIN_PORT: 24577
+      KMS_MAX_PORT: 32768
+      KMS_TURN_URL:
+      KMS_NETWORK_INTERFACES: ${NETWORK_INTERFACE:-}
+      GST_DEBUG: 3,Kurento*:4,kms*:4,KurentoWebSocketTransport:5
+    network_mode: host
+    volumes:
+      - vol-kurento:/var/kurento
+  
+  webrtc-sfu:
+    build: 
+      context: ./bbb-webrtc-sfu
+      dockerfile: ../mod/webrtc-sfu/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - kurento
+      - core
+    environment:
+      CLIENT_HOST: 0.0.0.0
+      KURENTO_NAME: kurento
+      REDIS_HOST: redis
+      FREESWITCH_IP: host.docker.internal
+      FREESWITCH_SIP_IP: ${EXTERNAL_IPv4}
+      ESL_IP: host.docker.internal
+      LOG_LEVEL: info
+      NODE_CONFIG: '{"kurento":[{"ip":"${EXTERNAL_IPv4}","url":"ws://kurento:8888/kurento"}]}'
+    ports:
+      - "127.0.0.1:3008:3008"
+    extra_hosts:
+      - host.docker.internal:10.7.7.1
+      - kurento:10.7.7.1
+    networks:
+      bbb-net:
+        ipv4_address: 10.7.7.10
+
+  html5:
+    build: mod/html5
+    extra_hosts:
+      - static-meteor.netdna-ssl.com:185.51.202.202
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - mongodb
+      - etherpad
+    volumes:
+      - html5-static:/html5-static:rw
+    environment:
+      DOMAIN: ${DOMAIN}
+      CLIENT_TITLE: ${CLIENT_TITLE}
+      ETHERPAD_API_KEY: ${ETHERPAD_API_KEY}
+      LISTEN_ONLY_MODE: ${LISTEN_ONLY_MODE:-true}
+      DISABLE_ECHO_TEST: ${DISABLE_ECHO_TEST:-false}
+      AUTO_SHARE_WEBCAM: ${AUTO_SHARE_WEBCAM:-false}
+      DISABLE_VIDEO_PREVIEW: ${DISABLE_VIDEO_PREVIEW:-false}
+      CHAT_ENABLED: ${CHAT_ENABLED:-true}
+      CHAT_START_CLOSED: ${CHAT_START_CLOSED:-false}
+      BREAKOUTROOM_LIMIT: ${BREAKOUTROOM_LIMIT:-8}
+      DEV_MODE: ${DEV_MODE:-}
+    networks:
+      bbb-net:
+        ipv4_address: 10.7.7.11
+
+  periodic:
+    build: mod/periodic
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - bigbluebutton:/var/bigbluebutton
+    networks:
+      bbb-net:
+        ipv4_address: 10.7.7.12
+
+volumes:
+  bigbluebutton:
+  vol-freeswitch:
+  vol-kurento:
+  html5-static:
+
+networks:
+  bbb-net:
+    ipam:
+      driver: default
+      config:
+        - subnet: "10.7.7.0/24"

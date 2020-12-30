@@ -1,0 +1,57 @@
+map $remote_addr $freeswitch_addr {
+    "~:"    [::1];
+    default    10.7.7.1;
+}
+
+server {
+  listen 8080 default_server;
+  listen [::]:8080 default_server;
+  server_name _;
+  access_log /dev/stdout;
+  absolute_redirect off;
+  
+  # redirect to greenlight
+  location = / {
+      return 302 /b;
+  }
+
+   # Handle RTMPT (RTMP Tunneling).  Forwards requests
+   # to Red5 on port 5080
+  location ~ (/open/|/close/|/idle/|/send/|/fcs/) {
+    proxy_pass         http://core:5080;
+    proxy_redirect     off;
+    proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+
+    client_max_body_size       10m;
+    client_body_buffer_size    128k;
+
+    proxy_connect_timeout      90;
+    proxy_send_timeout         90;
+    proxy_read_timeout         90;
+
+    proxy_buffering            off;
+    keepalive_requests         1000000000;
+  }
+
+  # Handle desktop sharing tunneling.  Forwards
+  # requests to Red5 on port 5080.
+  location /deskshare {
+     proxy_pass         http://core:5080;
+     proxy_redirect     default;
+     proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+     client_max_body_size       10m;
+     client_body_buffer_size    128k;
+     proxy_connect_timeout      90;
+     proxy_send_timeout         90;
+     proxy_read_timeout         90;
+     proxy_buffer_size          4k;
+     proxy_buffers              4 32k;
+     proxy_busy_buffers_size    64k;
+     proxy_temp_file_write_size 64k;
+     include    fastcgi_params;
+  }
+
+  # Include specific rules for record and playback
+  include /etc/nginx/bbb/*.nginx;
+
+}
